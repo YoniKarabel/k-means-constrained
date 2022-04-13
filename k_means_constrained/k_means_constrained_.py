@@ -21,6 +21,8 @@ from .sklearn_import.utils.validation import check_array, check_random_state, as
 from joblib import Parallel
 from joblib import delayed
 
+
+
 # Internal scikit learn methods imported into this project
 from k_means_constrained.sklearn_import.cluster._k_means import _centers_dense, _centers_sparse
 from k_means_constrained.sklearn_import.cluster.k_means_ import _validate_center_shape, _tolerance, KMeans, \
@@ -32,7 +34,7 @@ from k_means_constrained.mincostflow_vectorized import SimpleMinCostFlowVectoriz
 def k_means_constrained(X, n_clusters, size_min=None, size_max=None, init='k-means++',
                         n_init=10, max_iter=300, verbose=False,
                         tol=1e-4, random_state=None, copy_x=True, n_jobs=1,
-                        return_n_iter=False):
+                        return_n_iter=False, prob_X=None):
     """K-Means clustering with minimum and maximum cluster size constraints.
 
     Read more in the :ref:`User Guide <k_means>`.
@@ -179,7 +181,7 @@ def k_means_constrained(X, n_clusters, size_min=None, size_max=None, init='k-mea
                 X, n_clusters,
                 size_min=size_min, size_max=size_max,
                 max_iter=max_iter, init=init, verbose=verbose, tol=tol,
-                x_squared_norms=x_squared_norms, random_state=random_state)
+                x_squared_norms=x_squared_norms, random_state=random_state,prob_X=prob_X)
             # determine if these results are the best so far
             if best_inertia is None or inertia < best_inertia:
                 best_labels = labels.copy()
@@ -220,7 +222,7 @@ def k_means_constrained(X, n_clusters, size_min=None, size_max=None, init='k-mea
 def kmeans_constrained_single(X, n_clusters, size_min=None, size_max=None,
                               max_iter=300, init='k-means++',
                               verbose=False, x_squared_norms=None,
-                              random_state=None, tol=1e-4):
+                              random_state=None, tol=1e-4, prob_X=None):
     """A single run of k-means constrained, assumes preparation completed prior.
 
     Parameters
@@ -308,30 +310,48 @@ def kmeans_constrained_single(X, n_clusters, size_min=None, size_max=None,
     # closer center for reallocation in case of ties
     distances = np.zeros(shape=(n_samples,), dtype=X.dtype)
 
+    #calculate prob_X_sum and use it for min max constraints validation instead of n_samples
+    if prob_X is not None:
+        prob_X_sum = prob_X.sum()
+        prob_X_sum = prob_X_sum.astype(np.int32)
+
     # Determine min and max sizes if non given
     if size_min is None:
         size_min = 0
     if size_max is None:
-        size_max = n_samples  # Number of data points
+        size_max = n_samples if prob_X is None else prob_X_sum # Number of data points or prob_X_sum
 
     # Check size min and max
-    if not ((size_min >= 0) and (size_min <= n_samples)
-            and (size_max >= 0) and (size_max <= n_samples)):
-        raise ValueError("size_min and size_max must be a positive number smaller "
-                         "than the number of data points or `None`")
-    if size_max < size_min:
-        raise ValueError("size_max must be larger than size_min")
-    if size_min * n_clusters > n_samples:
-        raise ValueError("The product of size_min and n_clusters cannot exceed the number of samples (X)")
-    if size_max * n_clusters < n_samples:
-        raise ValueError("The product of size_max and n_clusters must be larger than or equal the number of samples (X)")
+    if prob_X is None:
+        if not ((size_min >= 0) and (size_min <= n_samples)
+                and (size_max >= 0) and (size_max <= n_samples)):
+            raise ValueError("size_min and size_max must be a positive number smaller "
+                             "than the number of data points or `None`")
+        if size_max < size_min:
+            raise ValueError("size_max must be larger than size_min")
+        if size_min * n_clusters > n_samples:
+            raise ValueError("The product of size_min and n_clusters cannot exceed the number of samples (X)")
+        if size_max * n_clusters < n_samples:
+            raise ValueError("The product of size_max and n_clusters must be larger than or equal the number of samples (X)")
+    # prob_X is not empty --> validate with prob_X_sum instead of n_samples
+    else:
+        if not ((size_min >= 0) and (size_min <= prob_X_sum)
+                and (size_max >= 0) and (size_max <= prob_X_sum)):
+            raise ValueError("size_min and size_max must be a positive number smaller "
+                             "than the probabilities sum of data points or `None`")
+        if size_max < size_min:
+            raise ValueError("size_max must be larger than size_min")
+        if size_min * n_clusters > prob_X_sum:
+            raise ValueError("The product of size_min and n_clusters cannot exceed the sum of samples probabilities (prob_X)")
+        if size_max * n_clusters < prob_X_sum:
+            raise ValueError("The product of size_max and n_clusters must be larger than or equal the sum of samples probabilities (prob_X)")
 
     # iterations
     for i in range(max_iter):
         centers_old = centers.copy()
         # labels assignment is also called the E-step of EM
         labels, inertia = \
-            _labels_constrained(X, centers, size_min, size_max, distances=distances)
+            _labels_constrained(X, centers, size_min, size_max, distances=distances, prob_X=prob_X)
 
         # computation of the means is also called the M-step of EM
         if sp.issparse(X):
@@ -359,12 +379,12 @@ def kmeans_constrained_single(X, n_clusters, size_min=None, size_max=None,
         # rerun E-step in case of non-convergence so that predicted labels
         # match cluster centers
         best_labels, best_inertia = \
-            _labels_constrained(X, centers, size_min, size_max, distances=distances)
+            _labels_constrained(X, centers, size_min, size_max, distances=distances, prob_X=prob_X)
 
     return best_labels, best_inertia, best_centers, i + 1
 
 
-def _labels_constrained(X, centers, size_min, size_max, distances):
+def _labels_constrained(X, centers, size_min, size_max, distances, prob_X):
     """Compute labels using the min and max cluster size constraint
 
     This will overwrite the 'distances' array in-place.
@@ -401,7 +421,7 @@ def _labels_constrained(X, centers, size_min, size_max, distances):
     # K-mean original uses squared distances but this equivalent for constrained k-means
     D = euclidean_distances(X, C, squared=False)
 
-    edges, costs, capacities, supplies, n_C, n_X = minimum_cost_flow_problem_graph(X, C, D, size_min, size_max)
+    edges, costs, capacities, supplies, n_C, n_X = minimum_cost_flow_problem_graph(X, C, D, size_min, size_max, prob_X)
     labels = solve_min_cost_flow_graph(edges, costs, capacities, supplies, n_C, n_X)
 
     # cython k-means M step code assumes int32 inputs
@@ -414,7 +434,8 @@ def _labels_constrained(X, centers, size_min, size_max, distances):
     return labels, inertia
 
 
-def minimum_cost_flow_problem_graph(X, C, D, size_min, size_max):
+def minimum_cost_flow_problem_graph(X, C, D, size_min, size_max, prob_X):
+
     # Setup minimum cost flow formulation graph
     # Vertices indexes:
     # X-nodes: [0, n(x)-1], C-nodes: [n(X), n(X)+n(C)-1], C-dummy nodes:[n(X)+n(C), n(X)+2*n(C)-1],
@@ -449,9 +470,31 @@ def minimum_cost_flow_problem_graph(X, C, D, size_min, size_max):
     ])
 
     # Sources and sinks
-    supplies_X = np.ones(n_X)
     supplies_C = -1 * size_min * np.ones(n_C)  # Demand node
-    supplies_art = -1 * (n_X - n_C * size_min)  # Demand node
+    if prob_X is None:
+        supplies_X = np.ones(n_X)
+        supplies_art = -1 * (n_X - n_C * size_min)  # Demand node
+    # for dau support
+    else:
+        supplies_X = prob_X * 1000 # 1000
+        supplies_C = supplies_C * 1000 # 1000
+        supplies_X = supplies_X.astype(np.int32)
+
+        # set capacities to match supply nodes values in order to improve performance of MCF
+        capacities_X_C_dummy = []
+        for s_x in prob_X:
+            for i in range(0, n_C):
+                capacities_X_C_dummy.append(s_x)
+
+        capacities = np.concatenate([
+            capacities_X_C_dummy,
+            capacities_C_dummy_C,
+            cap_non * np.ones(n_C)
+        ])
+
+        supplies_art = -1 * (supplies_X.sum() + supplies_C.sum())
+        capacities = capacities * 1000 # 1000
+
     supplies = np.concatenate([
         supplies_X,
         np.zeros(n_C),  # C_dummies
@@ -622,7 +665,7 @@ class KMeansConstrained(KMeans):
         super().__init__(n_clusters=n_clusters, init=init, n_init=n_init, max_iter=max_iter, tol=tol,
                          verbose=verbose, random_state=random_state, copy_x=copy_x, n_jobs=n_jobs)
 
-    def fit(self, X, y=None):
+    def fit(self, X, y=None, prob_X=None):
         """Compute k-means clustering with given constants.
 
         Parameters
@@ -647,10 +690,10 @@ class KMeansConstrained(KMeans):
                 n_init=self.n_init, max_iter=self.max_iter, verbose=self.verbose,
                 tol=self.tol, random_state=random_state, copy_x=self.copy_x,
                 n_jobs=self.n_jobs,
-                return_n_iter=True)
+                return_n_iter=True,prob_X=prob_X)
         return self
 
-    def predict(self, X, size_min='init', size_max='init'):
+    def predict(self, X, size_min='init', size_max='init',prob_X=None):
         """
         Predict the closest cluster each sample in X belongs to given the provided constraints.
         The constraints can be temporally overridden when determining which cluster each datapoint is assigned to.
@@ -699,24 +742,48 @@ class KMeansConstrained(KMeans):
         # closer center for reallocation in case of ties
         distances = np.zeros(shape=(n_samples,), dtype=X.dtype)
 
+        # calculate prob_X_sum and use it for min max constraints validation instead of n_samples
+        if prob_X is not None:
+            prob_X_sum = prob_X.sum()
+            prob_X_sum = prob_X_sum.astype(np.int32)
+
         # Determine min and max sizes if non given
         if size_min is None:
             size_min = 0
         if size_max is None:
-            size_max = n_samples  # Number of data points
+            size_max = n_samples if prob_X is None else prob_X_sum  # Number of data points or prob_X_sum
 
         # Check size min and max
-        if not ((size_min >= 0) and (size_min <= n_samples)
-                and (size_max >= 0) and (size_max <= n_samples)):
-            raise ValueError("size_min and size_max must be a positive number smaller "
-                             "than the number of data points or `None`")
-        if size_max < size_min:
-            raise ValueError("size_max must be larger than size_min")
-        if size_min * n_clusters > n_samples:
-            raise ValueError("The product of size_min and n_clusters cannot exceed the number of samples (X)")
+        if prob_X is None:
+            if not ((size_min >= 0) and (size_min <= n_samples)
+                    and (size_max >= 0) and (size_max <= n_samples)):
+                raise ValueError("size_min and size_max must be a positive number smaller "
+                                 "than the number of data points or `None`")
+            if size_max < size_min:
+                raise ValueError("size_max must be larger than size_min")
+            if size_min * n_clusters > n_samples:
+                raise ValueError("The product of size_min and n_clusters cannot exceed the number of samples (X)")
+            if size_max * n_clusters < n_samples:
+                raise ValueError(
+                    "The product of size_max and n_clusters must be larger than or equal the number of samples (X)")
+        # prob_X is not empty --> validate with prob_X_sum instead of n_samples
+        else:
+            if not ((size_min >= 0) and (size_min <= prob_X_sum)
+                    and (size_max >= 0) and (size_max <= prob_X_sum)):
+                raise ValueError(f"size_min ({size_min}) and size_max ({size_max}) must be a positive number smaller "
+                                 f"than the probabilities sum of data points ({prob_X_sum}) or `None`")
+            if size_max < size_min:
+                raise ValueError("size_max must be larger than size_min")
+            if size_min * n_clusters > prob_X_sum:
+                raise ValueError(
+                    "The product of size_min and n_clusters cannot exceed the sum of samples probabilities (prob_X)")
+            if size_max * n_clusters < prob_X_sum:
+                raise ValueError(
+                    "The product of size_max and n_clusters must be larger than or equal the sum of samples probabilities (prob_X)")
+
 
         labels, inertia = \
-            _labels_constrained(X, self.cluster_centers_, size_min, size_max, distances=distances)
+            _labels_constrained(X, self.cluster_centers_, size_min, size_max, distances=distances,prob_X=prob_X)
 
         return labels
 
