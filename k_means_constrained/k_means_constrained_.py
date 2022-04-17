@@ -463,22 +463,27 @@ def minimum_cost_flow_problem_graph(X, C, D, size_min, size_max, prob_X):
     # Capacities - can set for max-k
     capacities_C_dummy_C = size_max * np.ones(n_C)
     cap_non = n_X  # The total supply and therefore wont restrict flow
-    capacities = np.concatenate([
-        np.ones(edges_X_C_dummy.shape[0]),
-        capacities_C_dummy_C,
-        cap_non * np.ones(n_C)
-    ])
 
     # Sources and sinks
     supplies_C = -1 * size_min * np.ones(n_C)  # Demand node
+
     if prob_X is None:
         supplies_X = np.ones(n_X)
         supplies_art = -1 * (n_X - n_C * size_min)  # Demand node
+
+        # capacities when prob_X is None
+        capacities = np.concatenate([
+            np.ones(edges_X_C_dummy.shape[0]),
+            capacities_C_dummy_C,
+            cap_non * np.ones(n_C)
+        ])
     # for dau support
     else:
-        supplies_X = prob_X * 1000 # 1000
-        supplies_C = supplies_C * 1000 # 1000
+        # prob_X values will be in range (0.001-1), therefore multiple supplies and capacities by 1000 to get positive integers
+        supplies_X = prob_X * 1000
+        supplies_C = supplies_C * 1000
         supplies_X = supplies_X.astype(np.int32)
+        supplies_art = -1 * (supplies_X.sum() + supplies_C.sum())
 
         # set capacities to match supply nodes values in order to improve performance of MCF
         capacities_X_C_dummy = []
@@ -492,8 +497,7 @@ def minimum_cost_flow_problem_graph(X, C, D, size_min, size_max, prob_X):
             cap_non * np.ones(n_C)
         ])
 
-        supplies_art = -1 * (supplies_X.sum() + supplies_C.sum())
-        capacities = capacities * 1000 # 1000
+        capacities = capacities * 1000
 
     supplies = np.concatenate([
         supplies_X,
