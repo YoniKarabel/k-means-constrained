@@ -754,7 +754,7 @@ class KMeansConstrained(KMeans):
         # Determine min and max sizes if non given
         if size_min is None:
             size_min = 0
-        if size_max is None:
+        if size_max is None or size_max==0:
             size_max = n_samples if prob_X is None else prob_X_sum  # Number of data points or prob_X_sum
 
         # Check size min and max
