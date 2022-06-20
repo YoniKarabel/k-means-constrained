@@ -479,13 +479,13 @@ def minimum_cost_flow_problem_graph(X, C, D, size_min, size_max, prob_X):
         ])
     # for dau support
     else:
-        # prob_X values will be in range (0.001-1), therefore multiple supplies and capacities by 1000 to get positive integers
-        supplies_X = prob_X * 1000
-        supplies_C = supplies_C * 1000
+        # prob_X values will be in range (0.01-1), therefore multiple supplies and capacities by 100 to get positive integers
+        supplies_X = prob_X * 100
+        supplies_C = supplies_C * 100
         supplies_X = supplies_X.astype(np.int32)
         supplies_art = -1 * (supplies_X.sum() + supplies_C.sum())
 
-        # set capacities to match supply nodes values in order to improve performance of MCF
+       # set capacities to match supply nodes values in order to improve performance of MCF
         capacities_X_C_dummy = []
         for s_x in prob_X:
             for i in range(0, n_C):
@@ -497,7 +497,7 @@ def minimum_cost_flow_problem_graph(X, C, D, size_min, size_max, prob_X):
             cap_non * np.ones(n_C)
         ])
 
-        capacities = capacities * 1000
+        capacities = capacities * 100
 
     supplies = np.concatenate([
         supplies_X,
