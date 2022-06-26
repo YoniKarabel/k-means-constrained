@@ -113,6 +113,9 @@ def k_means_constrained(X, n_clusters, size_min=None, size_max=None, init='k-mea
     return_n_iter : bool, optional
         Whether or not to return the number of iterations.
 
+    prob_X : array-like, shape (n_samples, 2)
+            The probabilities of the observations (X) to cluster.
+
     Returns
     -------
     centroid : float ndarray with shape (k, n_features)
@@ -406,6 +409,9 @@ def _labels_constrained(X, centers, size_min, size_max, distances, prob_X):
     distances : numpy array, shape (n_samples,)
         Pre-allocated array in which distances are stored.
 
+    prob_X : numpy array, shape (n_sample, 2)
+        Probabilites (weights) of input data.
+
     Returns
     -------
     labels : numpy array, dtype=np.int, shape (n_samples,)
@@ -477,7 +483,7 @@ def minimum_cost_flow_problem_graph(X, C, D, size_min, size_max, prob_X):
             capacities_C_dummy_C,
             cap_non * np.ones(n_C)
         ])
-    # for dau support
+    # for prob_X support
     else:
         # prob_X values will be in range (0.01-1), therefore multiple supplies and capacities by 100 to get positive integers
         supplies_X = prob_X * 100
@@ -485,11 +491,9 @@ def minimum_cost_flow_problem_graph(X, C, D, size_min, size_max, prob_X):
         supplies_X = supplies_X.astype(np.int32)
         supplies_art = -1 * (supplies_X.sum() + supplies_C.sum())
 
-       # set capacities to match supply nodes values in order to improve performance of MCF
-        capacities_X_C_dummy = []
-        for s_x in prob_X:
-            for i in range(0, n_C):
-                capacities_X_C_dummy.append(s_x)
+        # set capacities to match supply nodes values in order to improve performance of MCF
+        # in order to match edges size and order, multiple each element in prob_X by number of clusters (n_C)
+        capacities_X_C_dummy = np.repeat(prob_X, n_C)
 
         capacities = np.concatenate([
             capacities_X_C_dummy,
